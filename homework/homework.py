@@ -61,7 +61,7 @@
 #   El pca usa todas las componentes.
 # - Escala la matriz de entrada al intervalo [0, 1].
 # - Selecciona las K columnas mas relevantes de la matrix de entrada.
-# - Ajusta una red neuronal tipo MLP.
+# - Ajusta una red neuronal tipo classifier.
 #
 #
 # Paso 4.
@@ -96,3 +96,261 @@
 # {'type': 'cm_matrix', 'dataset': 'train', 'true_0': {"predicted_0": 15562, "predicte_1": 666}, 'true_1': {"predicted_0": 3333, "predicted_1": 1444}}
 # {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
 #
+
+
+import os
+import gzip
+import json
+import pickle
+import numpy as np
+import pandas as pd
+from sklearn.neural_network import MLPClassifier
+from sklearn.decomposition import PCA
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, MinMaxScaler
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import (
+    precision_score, recall_score, f1_score,
+    balanced_accuracy_score, confusion_matrix
+)
+
+
+# ============================
+# Paso 1. Cargar y limpiar datos
+# ============================
+def load_data():
+    train_path = 'files/input/train_data.csv.zip'
+    test_path = 'files/input/test_data.csv.zip'
+
+    train_dataset = pd.read_csv(train_path, index_col=False)
+    test_dataset = pd.read_csv(test_path, index_col=False)
+    return train_dataset, test_dataset
+
+
+def clean_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    df.rename(columns={"default payment next month": "default"}, inplace=True)
+
+    df.drop(columns=["ID"], inplace=True)
+
+    df = df.loc[df["MARRIAGE"] != 0]
+    df = df.loc[df["EDUCATION"] != 0]
+
+    df["EDUCATION"] = df["EDUCATION"].apply(lambda x: 4 if x > 4 else x)
+
+    df.dropna(inplace=True)
+
+    # Eliminar duplicados
+    df = df.drop_duplicates()
+
+    return df
+
+
+# =====================
+# Paso 2: Separar variables y objetivo
+# =====================
+
+def split_features_target(train_dataset, test_dataset, target_col="default"):
+    x_train = train_dataset.drop(columns=[target_col])
+    y_train = train_dataset[target_col]
+    x_test = test_dataset.drop(columns=[target_col])
+    y_test = test_dataset[target_col]
+    return x_train, y_train, x_test, y_test
+
+
+def make_train_test_split(x, y):
+
+    from sklearn.model_selection import train_test_split
+
+    (x_train, x_test, y_train, y_test) = train_test_split(
+        x,
+        y,
+        test_size=0.25,
+        random_state=42
+    )
+    print("Tamaños:")
+    print("x_train:", x_train.shape)
+    print("y_train:", y_train.shape)
+    print("x_test:", x_test.shape)
+    print("y_test:", y_test.shape)
+
+    return x_train, x_test, y_train, y_test
+
+
+# ============================
+# Paso 3. Pipeline (con PCA y selección de K mejores)
+# ============================
+def make_pipeline(categorical_features, numeric_features, estimator):
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_features),
+            ("num", StandardScaler(), numeric_features),
+        ],
+        remainder='passthrough'
+    )
+
+    pipeline = Pipeline(
+        steps=[
+            ('preprocessor', preprocessor),
+            ('pca', PCA()),
+            ('feature_selection', SelectKBest(score_func=f_classif)),
+            ('classifier', estimator)
+        ],
+    )
+    return pipeline
+
+
+# =====================
+# Paso 4: Optimización de hiperparámetros
+# =====================
+def make_grid_search(estimator, param_grid, cv, score, x_train, y_train):
+
+    from sklearn.model_selection import GridSearchCV
+
+    grid_search = GridSearchCV(
+        estimator=estimator,
+        param_grid=param_grid,
+        cv=cv,
+        scoring=score,
+        n_jobs=-1,
+        verbose=1
+    )
+
+    grid_search.fit(x_train, y_train)
+    print("Mejores hiperparámetros:", grid_search.best_params_)
+
+    return grid_search
+
+# =====================
+# Paso 5: Guardar el modelo
+# =====================
+
+def save_estimator(estimator):
+    models_path = "files/models"
+    os.makedirs(models_path, exist_ok=True)
+
+    with gzip.open("files/models/model.pkl.gz", "wb") as file:
+        pickle.dump(estimator, file)     
+    print(f"Modelo guardado en: {'files/models/model.pkl.gz'}")
+
+
+def load_estimator(output_path):
+    """Cargar modelo comprimido"""
+    import gzip, pickle
+    if not os.path.exists(output_path):
+        return None
+    with gzip.open(output_path, "rb") as f:
+        return pickle.load(f)
+
+
+
+# =====================
+# Paso 6: Calcular métricas y guardarlas en un archivo JSON
+# =====================
+
+# Calcular métricas para el conjunto de entrenamiento y prueba
+
+
+
+def calculate_metrics(model, x_train, y_train, x_test, y_test):
+
+    y_train_pred = model.predict(x_train)
+    y_test_pred = model.predict(x_test)
+
+    cm_train = confusion_matrix(y_train, y_train_pred)
+    cm_test = confusion_matrix(y_test, y_test_pred)
+
+    metrics = [
+        {
+            'type': 'metrics',
+            'dataset': 'train',
+            'precision': round(precision_score(y_train, y_train_pred, zero_division=0), 4),
+            'balanced_accuracy': round(balanced_accuracy_score(y_train, y_train_pred), 4),
+            'recall': round(recall_score(y_train, y_train_pred, zero_division=0), 4),
+            'f1_score': round(f1_score(y_train, y_train_pred, zero_division=0), 4)
+        },
+        {
+            'type': 'metrics',
+            'dataset': 'test',
+            'precision': round(precision_score(y_test, y_test_pred, zero_division=0), 4),
+            'balanced_accuracy': round(balanced_accuracy_score(y_test, y_test_pred), 4),
+            'recall': round(recall_score(y_test, y_test_pred, zero_division=0), 4),
+            'f1_score': round(f1_score(y_test, y_test_pred, zero_division=0), 4)
+        },
+        {
+            'type': 'cm_matrix',
+            'dataset': 'train',
+            'true_0': {'predicted_0': int(cm_train[0, 0]), 'predicted_1': int(cm_train[0, 1])},
+            'true_1': {'predicted_0': int(cm_train[1, 0]), 'predicted_1': int(cm_train[1, 1])}
+        },
+        {
+            'type': 'cm_matrix',
+            'dataset': 'test',
+            'true_0': {'predicted_0': int(cm_test[0, 0]), 'predicted_1': int(cm_test[0, 1])},
+            'true_1': {'predicted_0': int(cm_test[1, 0]), 'predicted_1': int(cm_test[1, 1])}
+        }
+    ]
+
+    return metrics
+
+def save_metrics(metrics):
+    metrics_path = "files/output"
+    os.makedirs(metrics_path, exist_ok=True)
+    
+    with open("files/output/metrics.json", "w") as file:
+        for metric in metrics:
+            file.write(json.dumps(metric, ensure_ascii=False))
+            file.write('\n')
+
+# ============================
+# Orquestador principal
+# ============================
+
+import time
+
+inital_time = time.time()
+
+def main():
+    train_dataset, test_dataset = load_data()
+    train_dataset = clean_dataset(train_dataset)
+    test_dataset = clean_dataset(test_dataset)
+
+    x_train, y_train, x_test, y_test = split_features_target(train_dataset, test_dataset, "default")
+
+    categorical_features = ["EDUCATION", "MARRIAGE", "SEX"]
+    numeric_features = list(set(x_train.columns) - set(categorical_features))
+
+    estimator = MLPClassifier(random_state=42, max_iter=800)
+
+    pipeline = make_pipeline(categorical_features, numeric_features, estimator)
+
+    # Hiperparámetros a optimizar (de PCA, SelectKBest y SVM)
+    param_grid = {
+        "pca__n_components": [None],
+        "feature_selection__k": range(1, len(x_train.columns) + 1),
+        "classifier__hidden_layer_sizes": [(50, 30, 25)],
+        "classifier__alpha": [0.001, 0.01],
+        "classifier__learning_rate_init": [0.001]
+    }
+
+    model = make_grid_search(
+        estimator=pipeline,
+        param_grid=param_grid,
+        cv=10,
+        score="balanced_accuracy",
+        x_train=x_train,
+        y_train=y_train
+    )
+
+    save_estimator(model)
+    metrics = calculate_metrics(model, x_train, y_train, x_test, y_test)
+    save_metrics(metrics)
+
+
+
+if __name__ == "__main__":
+    main()
+    final = time.time()
+    print("Tiempo de ejecución:", (final - inital_time)/60, "minutos")
