@@ -179,7 +179,7 @@ def make_train_test_split(x, y):
 
 
 # ============================
-# Paso 3. Pipeline (con PCA y selección de K mejores)
+# Paso 3. Pipeline 
 # ============================
 def make_pipeline(categorical_features, numeric_features, estimator):
 
