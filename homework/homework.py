@@ -326,7 +326,7 @@ def main():
 
     pipeline = make_pipeline(categorical_features, numeric_features, estimator)
 
-    # Hiperparámetros a optimizar (de PCA, SelectKBest y SVM)
+
     param_grid = {
         "pca__n_components": [None],
         "feature_selection__k": range(1, len(x_train.columns) + 1),
